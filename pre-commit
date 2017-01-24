@@ -1,0 +1,140 @@
+#!/usr/bin/env node
+
+var gulp = require('gulp');
+var path = require('path');
+var gutil = require('gulp-util');
+var PluginError = require('gulp-util').PluginError;
+var exec = require('child_process').exec;
+var gutil = require('gulp-util');
+var colors = require('colors');
+var eslint = require('gulp-eslint');
+var Promise = require('bluebird');
+var process = require('process');
+var Config = path.join(process.cwd(), './.eslintrc');
+// var eslintrc = require(Config);
+if(!Config){
+  console.log("PLEASE CREATE .eslintrc file FITRT".red);
+  throw new PluginError("error", {message: '没有找到eslint文件'})
+}
+
+function mltLint (options) {
+  this.options = options;
+  this.flag = 0;
+}
+
+mltLint.prototype = {
+  constructor :  mltLint,
+  test : function (results, arrNum) {
+    var me = this;
+    if(results.messages.length != 0){
+      var messages = results.messages;
+      console.log(results.filePath.green);
+      for(var i = 0; i < messages.length; i++){
+        if(me.numInBox(messages[i].line, arrNum)){
+          me.flag++;
+          console.log('errorline and errcolum     '.red + messages[i].line + '行' + messages[i].column + '列' +
+            '\nerrorcode                  '.red + messages[i].source.blue + '\nerrormessage               ' + messages[i].message.blue + '\n');
+        }
+      }
+    }
+  },
+
+  getEsLintResult : function (errorlineNb) {
+    var me = this;
+    return new Promise(function (resolve, reject) {
+      var filePath = errorlineNb.filePath,  arr = errorlineNb.errLine;
+        gulp.src(filePath)  //
+          .pipe(eslint())     // js代码检查
+          .pipe(eslint.result(function (results) {
+              var arrNum = arr;
+              me.test(results, arrNum);
+              resolve("checkout");
+          }));
+    })
+  },
+  numInBox : function (num, arr) {
+    var flag = false;
+      for(var i = 0; i < arr.length; i++){
+        var arrList = arr[i];
+        if(num > arrList[0] && num < arrList[1]){
+          flag = true;
+        }
+      }
+      return flag;
+  },
+
+
+  lintChain : function () {
+    var me = this;
+    return new Promise(function (resolve, reject) {
+      var args = "git diff HEAD";
+      var shell = exec(args, function (error,  stdout, stderr) {
+          resolve(stdout);
+      });
+    }).then(function (stdout) {
+      return new Promise (function (resolve, reject) {
+        var errLineNb = [];
+        //将文件和行数从返回值中取出来的正则
+        var regx = /\+\s[b][\/][a-z/]*[\.][j][s]|[@][@]\s-[0-9]+\,[0-9]+\s\+[0-9]+\,[0-9]+/ig
+        //将文件取出来的正则
+        var errFileBox = stdout.match(regx);
+        if(errFileBox == null){return;}
+        var errLog = {
+          filePath : '',
+          errLine : []
+        }, errLogLine = [];
+        for(var i = 0; i<errFileBox.length; i++) {
+          if(errFileBox[i].match(/^\+/)){
+            if(errLog.filePath != ''){
+              errLineNb.push(errLog);
+            };
+            errLog = {
+              filePath : errFileBox[i].slice(4),
+              errLine : []
+            };
+          }else {
+            var a = errFileBox[i].split('+');
+            var b = a[1].split(',');
+            errLogLine.push(parseInt(b[0]));
+            errLogLine.push(parseInt(b[0]) + parseInt(b[1]));
+            errLog.errLine.push(errLogLine);
+            errLogLine = [];
+            if(i == errFileBox.length-1){
+              errLineNb.push(errLog);
+            }
+          }
+        };
+        
+        resolve(errLineNb);
+      })
+    }).then(function (errLineNb) {
+      return new Promise(function(resolve, reject){
+        if(errLineNb.length){
+          var promiseItr = [];
+          for(var i = 0; i < errLineNb.length;i++) {
+           promiseItr.push(me.getEsLintResult(errLineNb[i]));
+          }
+        }
+        Promise.all(promiseItr).then(function(){
+          resolve(me.flag);
+        })
+      })
+    }).then(function (flag) {
+      if(flag){ 
+        var error = {
+          name: 'ESLintError',
+          message: '你还有未解决的ESLint错误还不能提交代码'
+        }
+        throw error;
+      }else{
+        console.log("验证通过");
+      }
+    }).catch(function (e) {
+      console.log("代码检测完毕,并且您有代码规范错误😂");
+      process.kill(process.pid, 'SIGTERM');
+    })
+  } 
+};
+console.log("代码检测中......");
+var mlt = new mltLint();
+mlt.lintChain()
